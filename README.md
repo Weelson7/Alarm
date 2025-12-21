@@ -62,7 +62,7 @@ Schedules an alarm in 30 minutes with label "Wake up"
 #### Add a daily recurring alarm
 
 ```
-daily 08:00 Morning alarm
+daily add 08:00 Morning alarm
 ```
 
 Adds a daily alarm at 08:00 every day
@@ -70,34 +70,34 @@ Adds a daily alarm at 08:00 every day
 #### Remove a daily alarm
 
 ```
-remove-daily 08:00
+daily delete
 ```
 
-Removes the daily alarm at 08:00
+Interactively removes a daily alarm by ID
 
 #### Show pending alarms
 
 ```
-show
+list
 ```
 
 Displays all scheduled alarms with their fire times
 
-#### Clear all alarms
+#### Clear all manual alarms
 
 ```
-clear
+clear pending
 ```
 
-Removes all pending alarms (daily alarms remain)
+Removes all pending manual alarms (daily alarms remain)
 
 #### Set alarm volume
 
 ```
-volume 75
+vol 75
 ```
 
-Sets alarm volume to 75% (0-100)
+Sets alarm volume to 75% (1-100)
 
 #### Exit
 

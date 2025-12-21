@@ -44,15 +44,3 @@ if %ERRORLEVEL% NEQ 0 (
 REM Unexpected clean exit without stop marker - restart
 timeout /t 2 /nobreak
 goto start
-REM Return to original directory
-popd
-
-REM Check exit code
-if %ERRORLEVEL% EQU 0 (
-    REM Clean exit
-    exit /b 0
-) else (
-    REM Crash detected - restart after 2 seconds
-    timeout /t 2 /nobreak
-    goto start
-)

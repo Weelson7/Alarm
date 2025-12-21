@@ -5,6 +5,8 @@ Const CHECK_INTERVAL_MS = 5000 ' how often to verify the scheduler
 Const START_COOLDOWN_MS = 7000 ' wait after launching to avoid duplicate starts
 Const HEARTBEAT_STALE_MS = 15000 ' heartbeat older than this means scheduler is down
 Const RUN_VERB = "open" ' use "runas" if you explicitly want UAC prompt
+Const MAX_RESTARTS = 10 ' maximum restarts before giving up
+Const RESTART_RESET_MS = 300000 ' reset counter after 5 minutes of stability (300,000ms)
 
 Dim objShell, objFSO, objWMI
 Dim strScriptPath, strBatFile, lastLaunch
@@ -28,6 +30,10 @@ If Not objFSO.FileExists(strBatFile) Then
 End If
 
 lastLaunch = 0
+Dim restartCount
+restartCount = 0
+Dim lastSuccessfulStart
+lastSuccessfulStart = 0
 
 Call LaunchScheduler()
 
@@ -38,8 +44,24 @@ Do
     End If
 
     If Not IsSchedulerRunning() Then
+        If restartCount >= MAX_RESTARTS Then
+            WScript.Echo "Error: Scheduler has crashed " & restartCount & " times. Giving up to prevent infinite loop."
+            WScript.Echo "Please check scheduler.js for errors and restart watchdog manually."
+            WScript.Quit 1
+        End If
+        
         If lastLaunch = 0 Or ElapsedSince(lastLaunch) > START_COOLDOWN_MS Then
+            restartCount = restartCount + 1
             Call LaunchScheduler()
+        End If
+    Else
+        ' Scheduler is running - check if it's been stable
+        If lastSuccessfulStart = 0 Then
+            lastSuccessfulStart = GetTickCount()
+        ElseIf ElapsedSince(lastSuccessfulStart) > RESTART_RESET_MS Then
+            ' Reset restart counter after 5 minutes of stability
+            restartCount = 0
+            lastSuccessfulStart = GetTickCount()
         End If
     End If
     WScript.Sleep CHECK_INTERVAL_MS
@@ -97,6 +119,9 @@ Function ElapsedSince(ts)
         ElapsedSince = nowMs - ts
     Else
         ' Handle midnight wrap (Timer resets to 0)
+        ' When timer wraps: ts is large (e.g., 86399000), nowMs is small (e.g., 1000)
+        ' Elapsed = (time from ts to midnight) + (time from midnight to nowMs)
+        ' = (86400000 - ts) + nowMs
         ElapsedSince = (86400000 - ts) + nowMs
     End If
 End Function
