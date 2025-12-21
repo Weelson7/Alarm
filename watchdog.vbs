@@ -22,6 +22,8 @@ Dim heartbeatFile
 heartbeatFile = objFSO.BuildPath(strScriptPath, "heartbeat.txt")
 Dim stopFlagFile
 stopFlagFile = objFSO.BuildPath(strScriptPath, "stop.flag")
+Dim restartCountFile
+restartCountFile = objFSO.BuildPath(strScriptPath, "restart_count.txt")
 
 ' Verify batch file exists
 If Not objFSO.FileExists(strBatFile) Then
@@ -31,8 +33,23 @@ End If
 
 lastLaunch = 0
 Dim restartCount
-restartCount = 0
 Dim lastSuccessfulStart
+
+' Load restart count from file
+On Error Resume Next
+restartCount = 0
+If objFSO.FileExists(restartCountFile) Then
+    Dim countFile, savedCount
+    Set countFile = objFSO.OpenTextFile(restartCountFile, 1)
+    savedCount = countFile.ReadLine()
+    countFile.Close
+    If IsNumeric(savedCount) Then
+        restartCount = CInt(savedCount)
+    End If
+End If
+Err.Clear
+On Error GoTo 0
+
 lastSuccessfulStart = 0
 
 Call LaunchScheduler()
@@ -52,6 +69,14 @@ Do
         
         If lastLaunch = 0 Or ElapsedSince(lastLaunch) > START_COOLDOWN_MS Then
             restartCount = restartCount + 1
+            ' Save restart count to file
+            On Error Resume Next
+            Dim saveFile
+            Set saveFile = objFSO.CreateTextFile(restartCountFile, True)
+            saveFile.WriteLine CStr(restartCount)
+            saveFile.Close
+            Err.Clear
+            On Error GoTo 0
             Call LaunchScheduler()
         End If
     Else
@@ -61,6 +86,14 @@ Do
         ElseIf ElapsedSince(lastSuccessfulStart) > RESTART_RESET_MS Then
             ' Reset restart counter after 5 minutes of stability
             restartCount = 0
+            ' Save reset count to file
+            On Error Resume Next
+            Dim resetFile
+            Set resetFile = objFSO.CreateTextFile(restartCountFile, True)
+            resetFile.WriteLine "0"
+            resetFile.Close
+            Err.Clear
+            On Error GoTo 0
             lastSuccessfulStart = GetTickCount()
         End If
     End If
@@ -115,13 +148,33 @@ End Function
 Function ElapsedSince(ts)
     Dim nowMs
     nowMs = GetTickCount()
+    
+    ' FIX: Validate timestamp is in valid range (0 to slightly over 86400000 for wrap boundary)
+    Const MS_PER_DAY = 86400000
+    ' Allow timestamps up to 90 seconds after wrap to handle boundary conditions
+    Const WRAP_TOLERANCE = 90000
+    If ts < 0 Or ts > (MS_PER_DAY + WRAP_TOLERANCE) Then
+        ' Corrupted or invalid timestamp - return safe large value to allow restart
+        ElapsedSince = START_COOLDOWN_MS + 1000
+        Exit Function
+    End If
+    
     If nowMs >= ts Then
         ElapsedSince = nowMs - ts
     Else
-        ' Handle midnight wrap (Timer resets to 0)
+        ' Handle midnight wrap (Timer resets to 0 every 24 hours)
         ' When timer wraps: ts is large (e.g., 86399000), nowMs is small (e.g., 1000)
         ' Elapsed = (time from ts to midnight) + (time from midnight to nowMs)
-        ' = (86400000 - ts) + nowMs
-        ElapsedSince = (86400000 - ts) + nowMs
+        Dim elapsed
+        ' Use original ts for calculation since it's already validated
+        elapsed = (MS_PER_DAY - ts) + nowMs
+        ' CRITICAL: Protect against invalid results from hibernation/pause/clock adjustment
+        ' If calculation produces unreasonable result, return safe value to allow restart
+        If elapsed < 0 Or elapsed > MS_PER_DAY * 1.5 Then
+            ' Return a value larger than START_COOLDOWN_MS to allow restart
+            ElapsedSince = START_COOLDOWN_MS + 1000
+        Else
+            ElapsedSince = elapsed
+        End If
     End If
 End Function
