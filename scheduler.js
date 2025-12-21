@@ -18,9 +18,15 @@ const heartbeatFile = path.join(__dirname, 'heartbeat.txt');
 // Constants
 const MAX_SETTIMEOUT_DELAY = 2147483647; // 32-bit signed integer max (~24.8 days)
 const SEVEN_DAYS_MS = 604800000; // 7 days in milliseconds
-const DUPLICATE_ALARM_WINDOW_MS = 1000; // Window to detect accidental duplicate alarms (increased from 500ms)
+const DUPLICATE_ALARM_WINDOW_MS = 1000; // Window to detect accidental duplicate alarms
 const HEARTBEAT_WARNING_INTERVAL_MS = 30000; // Throttle heartbeat warnings to once per 30s
 const MAX_COUNTER_VALUE = 1000000000; // Reset counters at 1 billion to prevent overflow
+const WAKE_LEAD_SECONDS = 30; // Wake the PC 30s before the alarm
+const WAKE_TASK_PREFIX_MANUAL = 'StudyAlarmWake_alarm_';
+const WAKE_TASK_PREFIX_DAILY = 'StudyAlarmWake_daily_';
+const ES_CONTINUOUS = 0x80000000;
+const ES_SYSTEM_REQUIRED = 0x00000001;
+const ES_AWAYMODE_REQUIRED = 0x00000040;
 
 let alarmProcess = null;
 let dailyAlarmsEnabledToday = true;
@@ -78,7 +84,7 @@ function printHeader() {
  ███████║╚██████╗██║  ██║███████╗██████╔╝╚██████╔╝███████╗███████╗██║  ██║
  ╚══════╝ ╚═════╝╚═╝  ╚═╝╚══════╝╚═════╝  ╚═════╝ ╚══════╝╚══════╝╚═╝  ╚═╝
 `);
-  const author = chalk.gray('                           by Weelson');
+  const author = chalk.gray('                                           by Weelson');
   const time = chalk.yellow.bold(`                           ${getFormattedTime()}`);
   const separator = chalk.gray('─'.repeat(80));
   
@@ -221,6 +227,121 @@ function msUntil(time) {
   return Math.max(0, time.getTime() - Date.now());
 }
 
+// ========= WAKE SCHEDULER (Windows Task Scheduler) =========
+function runPowerShell(psScript) {
+  try {
+    const ps = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', psScript], {
+      stdio: 'ignore',
+      detached: true,
+      windowsHide: true
+    });
+    // Fully detach the process so Node doesn't wait for it
+    ps.unref();
+  } catch (_) {
+    // swallow; waking is best-effort
+  }
+}
+
+// Keep the system awake (away mode) while the scheduler is running so alarms can fire even if the PC would sleep
+function setAwayMode(enable) {
+  try {
+    const flags = enable ? (ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_AWAYMODE_REQUIRED) : ES_CONTINUOUS;
+    const psScript = [
+      "Add-Type -Namespace Win32 -Name NativeMethods -MemberDefinition @'",
+      "  [DllImport(\"kernel32.dll\")] public static extern uint SetThreadExecutionState(uint esFlags);",
+      "'@",
+      `[Win32.NativeMethods]::SetThreadExecutionState(${flags}) | Out-Null`
+    ].join('\n');
+    runPowerShell(psScript);
+  } catch (_) {
+    // If this fails, we just fall back to normal behavior
+  }
+}
+
+function toIsoDateTime(dt) {
+  const yyyy = dt.getFullYear();
+  const MM = String(dt.getMonth() + 1).padStart(2, '0');
+  const dd = String(dt.getDate()).padStart(2, '0');
+  const HH = String(dt.getHours()).padStart(2, '0');
+  const mm = String(dt.getMinutes()).padStart(2, '0');
+  const ss = String(dt.getSeconds()).padStart(2, '0');
+  return `${yyyy}-${MM}-${dd} ${HH}:${mm}:${ss}`;
+}
+
+function createWakeTaskOnce(taskName, fireTime) {
+  try {
+    let wakeMs = fireTime.getTime() - WAKE_LEAD_SECONDS * 1000;
+    // Clamp to ~1s in the future if already past
+    const now = Date.now();
+    if (wakeMs <= now) wakeMs = now + 1000;
+    const wakeDt = new Date(wakeMs);
+    const iso = toIsoDateTime(wakeDt).replace(/'/g, "''");
+    const psScript = [
+      `$TaskName = '${taskName.replace(/'/g, "''")}'`,
+      `Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue -WarningAction SilentlyContinue | Out-Null`,
+      `$time = [datetime]::ParseExact('${iso}','yyyy-MM-dd HH:mm:ss',$null)`,
+      `$action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument '-NoProfile -WindowStyle Hidden -Command Start-Sleep -Seconds 1'`,
+      `$trigger = New-ScheduledTaskTrigger -Once -At $time`,
+      `$settings = New-ScheduledTaskSettingsSet -WakeToRun -StartWhenAvailable -AllowStartIfOnBatteries`,
+      `$principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME`,
+      `Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -ErrorAction SilentlyContinue | Out-Null`
+    ].join('\n');
+    runPowerShell(psScript);
+  } catch (_) {
+    // best-effort only
+  }
+}
+
+function ensureDailyWakeTask(taskName, hour, minute) {
+  try {
+    // Compute wake time-of-day (minus 30s, wrap across midnight as needed)
+    const base = new Date(2000, 0, 1, hour, minute, 0, 0);
+    base.setSeconds(base.getSeconds() - WAKE_LEAD_SECONDS);
+    const HH = String(base.getHours()).padStart(2, '0');
+    const mm = String(base.getMinutes()).padStart(2, '0');
+    const ss = String(base.getSeconds()).padStart(2, '0');
+    const timeStr = `${HH}:${mm}:${ss}`.replace(/'/g, "''");
+    const psScript = [
+      `$TaskName = '${taskName.replace(/'/g, "''")}'`,
+      `Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue -WarningAction SilentlyContinue | Out-Null`,
+      `$t = [datetime]::ParseExact('${timeStr}','HH:mm:ss',$null)`,
+      `$today = Get-Date`,
+      `$dt = [datetime]::new($today.Year, $today.Month, $today.Day, $t.Hour, $t.Minute, $t.Second)`,
+      `$action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument '-NoProfile -WindowStyle Hidden -Command Start-Sleep -Seconds 1'`,
+      `$trigger = New-ScheduledTaskTrigger -Daily -At $dt`,
+      `$settings = New-ScheduledTaskSettingsSet -WakeToRun -StartWhenAvailable -AllowStartIfOnBatteries`,
+      `$principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME`,
+      `Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -ErrorAction SilentlyContinue | Out-Null`
+    ].join('\n');
+    runPowerShell(psScript);
+  } catch (_) {
+    // best-effort only
+  }
+}
+
+function deleteWakeTask(taskName) {
+  try {
+    const psScript = `$TaskName='${taskName.replace(/'/g, "''")}'; Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue -WarningAction SilentlyContinue | Out-Null`;
+    runPowerShell(psScript);
+  } catch (_) {
+    // ignore
+  }
+}
+
+function cleanupAllWakeTasks() {
+  try {
+    // Delete all manual alarm wake tasks
+    const manualPrefix = WAKE_TASK_PREFIX_MANUAL.replace(/'/g, "''");
+    const dailyPrefix = WAKE_TASK_PREFIX_DAILY.replace(/'/g, "''");
+    const psScript = [
+      `Get-ScheduledTask | Where-Object { $_.TaskName -like '${manualPrefix}*' -or $_.TaskName -like '${dailyPrefix}*' } | Unregister-ScheduledTask -Confirm:$false -ErrorAction SilentlyContinue -WarningAction SilentlyContinue | Out-Null`
+    ].join('\n');
+    runPowerShell(psScript);
+  } catch (_) {
+    // ignore
+  }
+}
+
 function nextOccurrence(hour, minute) {
   const now = new Date();
   const target = new Date(now);
@@ -284,6 +405,10 @@ function scheduleAt(timeStr, label, alarmId) {
       }
     }
   }, delay);
+  // Best-effort: create a one-time wake task 30s before
+  if (alarmId) {
+    createWakeTaskOnce(`${WAKE_TASK_PREFIX_MANUAL}${alarmId}`, fireTime);
+  }
   
   if (alarmId) {
     pendingTimeouts.set(`alarm_${alarmId}`, timeoutId);
@@ -322,6 +447,10 @@ function scheduleIn(minutes, label, alarmId) {
       }
     }
   }, delayMs);
+  // Best-effort: create a one-time wake task 30s before
+  if (alarmId) {
+    createWakeTaskOnce(`${WAKE_TASK_PREFIX_MANUAL}${alarmId}`, fireTime);
+  }
   
   if (alarmId) {
     pendingTimeouts.set(`alarm_${alarmId}`, timeoutId);
@@ -402,6 +531,8 @@ function scheduleDailyAlarm(dailyAlarmId, hour, minute, label) {
     }, delay);
     
     pendingTimeouts.set(`daily_${dailyAlarmId}`, timeoutId);
+    // Ensure a persistent daily wake task exists for this alarm time
+    ensureDailyWakeTask(`${WAKE_TASK_PREFIX_DAILY}${dailyAlarmId}`, hour, minute);
   }
   scheduleNext();
 }
@@ -409,6 +540,8 @@ function scheduleDailyAlarm(dailyAlarmId, hour, minute, label) {
 function initDailyAlarms() {
   dailyAlarms.forEach(({ id, hour, minute, label }) => {
     scheduleDailyAlarm(id, hour, minute, label);
+    // Also ensure wake task is registered (idempotent)
+    ensureDailyWakeTask(`${WAKE_TASK_PREFIX_DAILY}${id}`, hour, minute);
   });
   scheduleDailyReset(); // Schedule the daily reset for midnight
   
@@ -784,6 +917,10 @@ function loadPending() {
             }, delay);
             pendingTimeouts.set(`alarm_${p.id}`, timeoutId);
             pending.push(p);
+            // Create wake task 30s before
+            if (p.id) {
+              createWakeTaskOnce(`${WAKE_TASK_PREFIX_MANUAL}${p.id}`, new Date(p.fireTime));
+            }
           }
         } else if (p.type === 'at' && p.when) {
           const [hour, minute] = p.when.split(':').map(Number);
@@ -817,6 +954,10 @@ function loadPending() {
               }, delay);
               pendingTimeouts.set(`alarm_${p.id}`, timeoutId);
               pending.push(p);
+              // Create wake task 30s before
+              if (p.id) {
+                createWakeTaskOnce(`${WAKE_TASK_PREFIX_MANUAL}${p.id}`, new Date(p.fireTime));
+              }
             }
           } else {
             // No stored fireTime - calculate next occurrence and store it
@@ -832,6 +973,10 @@ function loadPending() {
             }, delay);
             pendingTimeouts.set(`alarm_${p.id}`, timeoutId);
             pending.push(p);
+            // Create wake task 30s before
+            if (p.id) {
+              createWakeTaskOnce(`${WAKE_TASK_PREFIX_MANUAL}${p.id}`, fireTime);
+            }
           }
         }
       });
@@ -1044,6 +1189,8 @@ function showPending() {
       clearTimeout(timeoutId);
       pendingTimeouts.delete(`alarm_${id}`);
     }
+    // Also remove one-time wake task for this alarm
+    deleteWakeTask(`${WAKE_TASK_PREFIX_MANUAL}${id}`);
   });
   
   // Then remove from array by ID (safe against array modifications)
@@ -1176,6 +1323,7 @@ dailyResetScheduled = false; // Reset flag so scheduleDailyReset can run again
 
 initDailyAlarms();
 startHeartbeat();
+setAwayMode(true);
 
 function handle(line) {
   const input = line.trim();
@@ -1287,6 +1435,8 @@ function handle(line) {
         
         // Schedule the new daily alarm
         scheduleDailyAlarm(dailyAlarmId, hour, minute, label);
+        // Ensure wake task exists
+        ensureDailyWakeTask(`${WAKE_TASK_PREFIX_DAILY}${dailyAlarmId}`, hour, minute);
         
         log(chalk.green(`Daily alarm added: ${time}${label ? ` - ${label}` : ''}`));
         break;
@@ -1381,6 +1531,8 @@ function handle(line) {
                         pendingTimeouts.delete(`daily_${id}`);
                       }
                       scheduleDailyAlarm(id, newHour, newMinute, newLabel);
+                      // Update wake task for modified daily alarm
+                      ensureDailyWakeTask(`${WAKE_TASK_PREFIX_DAILY}${id}`, newHour, newMinute);
                       
                         log(chalk.green(`Daily alarm modified: ${String(newHour).padStart(2, '0')}:${String(newMinute).padStart(2, '0')}${newLabel ? ` - ${newLabel}` : ''}`));
                       promptActive = false;
@@ -1454,6 +1606,8 @@ function handle(line) {
             clearTimeout(timeout);
             pendingTimeouts.delete(`daily_${id}`);
           }
+          // Remove wake task for this daily alarm
+          deleteWakeTask(`${WAKE_TASK_PREFIX_DAILY}${id}`);
           
           log(chalk.green(`Daily alarm deleted: ${String(deleted.hour).padStart(2, '0')}:${String(deleted.minute).padStart(2, '0')}${deleted.label ? ` - ${deleted.label}` : ''}`));
           promptActive = false;
@@ -1544,6 +1698,8 @@ function handle(line) {
         
         // Remove from pending
         removePending(id);
+        // Remove wake task for this manual alarm
+        deleteWakeTask(`${WAKE_TASK_PREFIX_MANUAL}${id}`);
         
         log(chalk.green(`Alarm removed: ${alarmToRemove.type} ${alarmToRemove.when || ''}${alarmToRemove.label ? ` - ${alarmToRemove.label}` : ''}`));
         promptActive = false;
@@ -1578,6 +1734,8 @@ function handle(line) {
                 clearTimeout(timeoutId);
                 pendingTimeouts.delete(`alarm_${p.id}`);
               }
+              // Also remove wake task for each manual alarm
+              deleteWakeTask(`${WAKE_TASK_PREFIX_MANUAL}${p.id}`);
             });
             pending.length = 0;
             savePending();
@@ -1636,6 +1794,7 @@ function handle(line) {
     case 'quit':
     case 'exit': {
       stopAlarm();
+      setAwayMode(false);
       // Create stop flag to signal watchdog this was intentional
       try {
         fs.writeFileSync(stopFlagFile, 'stop', 'utf8');
@@ -1652,6 +1811,8 @@ function handle(line) {
         clearTimeout(timeoutId);
       });
       pendingTimeouts.clear();
+      // Clean up all scheduled wake tasks
+      cleanupAllWakeTasks();
       // Don't clear pending array - it's persisted to disk
       log(chalk.green.bold('Goodbye!'));
       try {

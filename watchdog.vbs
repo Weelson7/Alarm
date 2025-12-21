@@ -4,7 +4,7 @@ Option Explicit
 Const CHECK_INTERVAL_MS = 5000 ' how often to verify the scheduler
 Const START_COOLDOWN_MS = 7000 ' wait after launching to avoid duplicate starts
 Const HEARTBEAT_STALE_MS = 15000 ' heartbeat older than this means scheduler is down
-Const RUN_VERB = "open" ' use "runas" if you explicitly want UAC prompt
+Const RUN_VERB = "open" ' launch without UAC elevation (default verb)
 Const MAX_RESTARTS = 10 ' maximum restarts before giving up
 Const RESTART_RESET_MS = 300000 ' reset counter after 5 minutes of stability (300,000ms)
 
@@ -52,11 +52,24 @@ On Error GoTo 0
 
 lastSuccessfulStart = 0
 
+' Clear any stale graceful-stop marker on startup so a new launch isn't blocked
+On Error Resume Next
+If objFSO.FileExists(stopFlagFile) Then
+    objFSO.DeleteFile stopFlagFile, True
+End If
+Err.Clear
+On Error GoTo 0
+
 Call LaunchScheduler()
 
 Do
     ' If scheduler requested a stop, exit watchdog too
     If objFSO.FileExists(stopFlagFile) Then
+        ' Clean up the flag and exit to honor graceful shutdown
+        On Error Resume Next
+        objFSO.DeleteFile stopFlagFile, True
+        Err.Clear
+        On Error GoTo 0
         WScript.Quit 0
     End If
 

@@ -1,165 +1,110 @@
 # Alarm Scheduler
 
-A Windows-based alarm scheduler application built with Node.js. Schedule alarms at specific times or after a set duration, with daily recurring alarms and persistent state management.
+A Windows-based alarm scheduler built with Node.js. Schedule alarms at specific times or after a set duration, set daily recurring alarms, adjust volume, and rely on persistent state with automatic crash recovery.
 
-## Features
+## Quick Start
 
-- **Schedule alarms at specific times** - Use 24-hour format (HH:MM)
-- **Schedule alarms after a duration** - Set alarms for minutes from now (max 1440 minutes/24 hours)
-- **Daily recurring alarms** - Set up to 16 daily alarms that repeat every day
-- **Volume control** - Adjust alarm volume from 0-100%
-- **Persistent state** - Alarms persist across application restarts
-- **Automatic restart** - Watchdog supervisor restarts the scheduler on crashes
-- **Admin elevation** - VBScript launcher handles Windows UAC elevation
-
-## Installation
-
-1. Install [Node.js](https://nodejs.org/) (LTS version recommended)
-2. Clone or download this repository
-3. Navigate to the project directory
-4. Install dependencies:
+1. Install Node.js (LTS recommended).
+2. Place an audio file named `alarm.mp3` in this folder.
+3. Install dependencies:
 
 ```bash
 npm install
 ```
 
-## Usage
-
-### Starting the Scheduler
-
-Run the watchdog to start the scheduler with admin elevation:
+4. Start with the watchdog (recommended on Windows):
 
 ```bash
 cscript watchdog.vbs
 ```
 
-Or directly start with Node.js:
+Or start directly:
 
 ```bash
 npm start
 ```
 
-### Commands
+To stop cleanly, type `exit` or `quit` in the app. This writes a `stop.flag` so the watchdog won’t restart it.
 
-Once running, the scheduler accepts the following commands:
+## Features
 
-#### Schedule an alarm at a specific time
+- **Schedule at time**: `at HH:MM [label]` — 24h format; runs tomorrow if time has passed.
+- **Schedule in minutes**: `in <0.1–1440> [label]` — decimals allowed.
+- **Daily alarms**: Add, modify, delete recurring alarms; auto-reset enabled state at midnight.
+- **Volume control**: `vol [0–100]`; persists across restarts.
+- **Missed alarms handling**: Interactive tools to reschedule or drop missed alarms.
+- **Persistent state**: Alarms and settings saved to disk with atomic writes and backups.
+- **Crash recovery**: `run.bat` restarts on crashes; `watchdog.vbs` supervises and avoids loops.
+- **Wake from sleep**: Automatically creates Windows Scheduled Tasks to wake the PC 30 seconds before each manual and daily alarm (best-effort).
 
-```
-at 14:30 Lunch reminder
-```
+## Commands
 
-Schedules an alarm at 14:30 (2:30 PM) with label "Lunch reminder"
+Run the app and type commands at the `->` prompt:
 
-#### Schedule an alarm after N minutes
+- `in <minutes> [label]`: alarm after N minutes (0.1–1440).
+- `at <HH:MM> [label]`: alarm at 24h clock time (tomorrow if passed).
+- `stop the alarm`: stop currently playing alarm.
+- `vol [0–100]`: show or set alarm volume.
+- `daily add <HH:MM> <label>`: add a daily recurring alarm.
+- `daily modify`: interactively modify a daily alarm.
+- `daily delete`: interactively delete a daily alarm.
+- `disable daily` / `enable daily`: toggle daily alarms for today (auto-resets at midnight).
+- `list`: show scheduled daily and manual alarms.
+- `remove`: interactively remove a manual alarm by ID.
+- `status`: show scheduler status and daily alarm state.
+- `clear pending`: clear all pending manual alarms.
+- `solve missed`: manage missed alarms (reschedule/drop individually or all).
+- `help`: show help.
+- `quit` / `exit`: stop the scheduler gracefully.
 
-```
-in 30 Wake up
-```
+## Files & State
 
-Schedules an alarm in 30 minutes with label "Wake up"
+- `scheduler.js`: main application.
+- `run.bat`: restart-on-crash supervisor (up to 5 retries; resets after stable run).
+- `watchdog.vbs`: external watchdog that starts `run.bat`, monitors `heartbeat.txt`, and stops when `stop.flag` exists.
+- `package.json`: metadata and `npm start` script.
+- `alarm.mp3`: audio file played for alarms (you must provide this).
 
-#### Add a daily recurring alarm
+State and logs:
 
-```
-daily add 08:00 Morning alarm
-```
-
-Adds a daily alarm at 08:00 every day
-
-#### Remove a daily alarm
-
-```
-daily delete
-```
-
-Interactively removes a daily alarm by ID
-
-#### Show pending alarms
-
-```
-list
-```
-
-Displays all scheduled alarms with their fire times
-
-#### Clear all manual alarms
-
-```
-clear pending
-```
-
-Removes all pending manual alarms (daily alarms remain)
-
-#### Set alarm volume
-
-```
-vol 75
-```
-
-Sets alarm volume to 75% (1-100)
-
-#### Exit
-
-```
-exit
-```
-
-Gracefully shuts down the scheduler
-
-## Configuration
-
-The scheduler stores state in JSON files:
-
-- `config.json` - Alarm volume, alarm ID counter, last reset date, daily alarms enabled status
-- `pending.json` - Pending alarms awaiting trigger
-
-These files are created automatically and include backup recovery (.bak files) in case of corruption.
-
-## Files
-
-- `scheduler.js` - Main scheduler application (Node.js)
-- `run.bat` - Batch supervisor script with restart logic
-- `watchdog.vbs` - VBScript launcher for admin elevation
-- `package.json` - Node.js dependencies and metadata
-- `alarm.mp3` - Audio file played when alarm triggers
+- `config.json`: volume, ID counters, daily alarm toggle, last reset date.
+- `pending.json`: manual, daily, and missed alarms (auto-backup to `pending.json.bak`).
+- `heartbeat.txt`: written every 3s to indicate the app is alive.
+- `restart_count.txt`: watchdog keeps a crash restart counter here.
+- `stop.flag`: written on `quit/exit` to signal graceful shutdown.
 
 ## Requirements
 
-- Windows operating system
-- Node.js 14.0 or later
-- PowerShell (included with Windows)
-- Administrator privileges (for audio control)
+- Windows 10/11
+- Node.js 14+ (tested) and PowerShell
+- Administrator privileges recommended for reliable audio control
+- Allow wake timers in Windows Power Options
 
 ## Error Recovery
 
-If the application crashes:
-
-1. `run.bat` automatically restarts it (up to 5 consecutive attempts)
-2. If 5 crashes occur in quick succession, the batch file exits with an error
-3. Pending alarms are restored from `pending.json` on restart
-4. If state files are corrupted, backups (.bak files) are automatically used
+- `run.bat` restarts on non-zero exit or unexpected clean exit (without `stop.flag`).
+- Retry counter resets if the app stays up for 5+ minutes.
+- `watchdog.vbs` limits restarts and resets after stability; exits when `stop.flag` is present.
+- Pending and daily alarms are restored on restart. Corrupted files auto-restore from backups when possible.
 
 ## Troubleshooting
 
-### Application won't start
-
-- Ensure Node.js is installed and in your PATH
-- Run `watchdog.vbs` with administrator privileges
-- Check that all files are in the same directory
-
-### Alarms not playing
-
-- Verify `alarm.mp3` exists in the application directory
-- Check Windows volume is not muted
-- Ensure the volume percentage is not set to 0%
-
-### Daily alarms not triggering
-
-- Check that daily alarms are enabled (add one with `daily HH:MM Label`)
-- Verify the system time is correct
-- Restart the application
+- App won’t start: ensure Node.js is installed and `npm install` succeeded; try `cscript watchdog.vbs`.
+- No sound: verify `alarm.mp3` exists; check system volume; ensure `vol` is not `0`.
+- Daily alarms not firing: confirm daily is enabled (`enable daily`), system time is correct, then restart.
+- PC doesn’t wake: ensure wake timers are allowed and task wake is set.
+	- Power Options → Advanced settings → Sleep → Allow wake timers → Enable.
+	- Task Scheduler tasks are named `StudyAlarmWake_alarm_<id>` and `StudyAlarmWake_daily_<id>`; verify their triggers.
+	- Some Modern Standby devices restrict waking on battery; try on AC power.
 
 ## License
+## Sleep/Wake Notes
 
-This project is provided as-is for personal use.
+This app attempts to wake the machine 30 seconds before alarms by registering Windows Scheduled Tasks via PowerShell:
+
+- Manual alarms (`in`/`at`): one-time tasks created at the computed time minus 30 seconds.
+- Daily alarms: a persistent daily task created at the alarm time minus 30 seconds.
+
+Wake is best-effort and depends on system policy. If tasks fail to register due to permissions or policy, you can manually create wake-enabled tasks in Task Scheduler to run shortly before your alarms (any trivial action is fine). Make sure wake timers are enabled in Power Options.
+
+Personal use only; no warranty.
