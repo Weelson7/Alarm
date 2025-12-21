@@ -4,6 +4,8 @@ const readline = require('readline');
 const { spawn } = require('child_process');
 
 const alarmFile = path.join(__dirname, 'alarm.mp3');
+const stopFlagFile = path.join(__dirname, 'stop.flag');
+const heartbeatFile = path.join(__dirname, 'heartbeat.txt');
 let alarmProcess = null;
 let dailyAlarmsEnabledToday = true;
 let alarmVolume = 100;
@@ -64,6 +66,7 @@ function playAlarm(label) {
   }
 
   const escapedPath = alarmFile.replace(/'/g, "''");
+  const volScalar = Math.max(0.01, Math.min(1, alarmVolume / 100)); // clamp to 1%-100%
   const psScript = [
     "# Set system volume and create media player",
     "Add-Type -TypeDefinition @'",
@@ -100,7 +103,7 @@ function playAlarm(label) {
     "  public static void SetVol(float v) { GetVol().SetMasterVolumeLevelScalar(v, System.Guid.Empty); }",
     "}",
     "'@",
-    "[Audio]::SetVol(${alarmVolume / 100})",
+    `[Audio]::SetVol(${volScalar})`,
     "",
     "# Load required assemblies for audio playback",
     "Add-Type -AssemblyName presentationCore",
@@ -108,7 +111,7 @@ function playAlarm(label) {
     "# Create media player",
     "$mediaPlayer = New-Object System.Windows.Media.MediaPlayer",
     `$mediaPlayer.Open([System.Uri]::new('${escapedPath}'))`,
-    `$mediaPlayer.Volume = ${alarmVolume / 100}`,
+    `$mediaPlayer.Volume = ${volScalar}`,
     "",
     "# Play in loop",
     "while ($true) {",
@@ -184,13 +187,14 @@ function scheduleAt(timeStr, label, alarmId) {
 
 function scheduleIn(minutes, label, alarmId) {
   const mins = Number(minutes);
-  if (!Number.isFinite(mins) || mins <= 0 || !Number.isInteger(mins) || mins > 1440) {
-    log('Minutes must be a positive integer between 1 and 1440.');
+  if (!Number.isFinite(mins) || mins <= 0 || mins > 1440) {
+    log('Minutes must be a positive number between 0.001 and 1440.');
     return;
   }
   
-  const fireTime = new Date(Date.now() + mins * 60 * 1000);
-  const delayMs = mins * 60 * 1000;
+  // Allow fractional minutes (e.g., 0.001 = 60ms); ensure at least 1ms delay
+  const delayMs = Math.max(1, Math.round(mins * 60 * 1000));
+  const fireTime = new Date(Date.now() + delayMs);
   
   const timeoutId = setTimeout(() => {
     playAlarm(label);
@@ -259,9 +263,29 @@ function initDailyAlarms() {
   log('Daily alarm schedule initialized (7AM, 9AM, 10AM, 11AM, 11:15AM, 12:30PM, 1:15PM, 2:30PM, 2:45PM, 4PM, 4:30PM, 6PM, 6:15PM, 7:30PM, 7:45PM, 9PM).');
 }
 
+let heartbeatTimer = null;
+function startHeartbeat() {
+  const writeBeat = () => {
+    try {
+      fs.writeFileSync(heartbeatFile, `${Date.now()}`);
+    } catch (err) {
+      log(`Warning: Could not write heartbeat: ${err.message}`);
+    }
+  };
+  writeBeat();
+  heartbeatTimer = setInterval(writeBeat, 3000);
+}
+
+function stopHeartbeat() {
+  if (heartbeatTimer) {
+    clearInterval(heartbeatTimer);
+    heartbeatTimer = null;
+  }
+}
+
 function printHelp() {
   console.log('Commands:');
-  console.log("  in <minutes> [label]   - alarm after N minutes (max 1440)");
+  console.log("  in <minutes> [label]   - alarm after N minutes (decimals ok, max 1440)");
   console.log("  at <HH:MM> [label]     - alarm at 24h clock time (tomorrow if time passed)");
   console.log('  vol [0-100]            - show or set alarm volume (%)'); 
   console.log('  stop the alarm         - stop currently playing alarm');
@@ -296,7 +320,8 @@ function loadConfig() {
     if (fs.existsSync('config.json')) {
       const data = fs.readFileSync('config.json', 'utf8');
       config = JSON.parse(data);
-      alarmVolume = config.volume ?? 100; // Use nullish coalescing to handle 0 correctly
+      const loadedVol = config.volume ?? 100; // Use nullish coalescing to handle 0 correctly
+      alarmVolume = Math.min(100, Math.max(1, Number(loadedVol) || 100));
       alarmIdCounter = config.alarmIdCounter ?? 0; // Restore counter to prevent ID collisions
       lastResetDate = config.lastResetDate ?? new Date().toDateString(); // Restore last reset date
       dailyAlarmsEnabledToday = config.dailyAlarmsEnabledToday ?? true; // Restore daily alarms state
@@ -312,7 +337,7 @@ function loadConfig() {
 
 function saveConfig() {
   try {
-    config.volume = alarmVolume;
+    config.volume = Math.min(100, Math.max(1, Math.round(alarmVolume)));
     config.alarmIdCounter = alarmIdCounter; // Persist counter
     config.lastResetDate = lastResetDate; // Persist last reset date
     config.dailyAlarmsEnabledToday = dailyAlarmsEnabledToday; // Persist daily alarms state
@@ -525,6 +550,7 @@ dailyKeys.forEach(key => {
 dailyResetScheduled = false; // Reset flag so scheduleDailyReset can run again
 
 initDailyAlarms();
+startHeartbeat();
 
 function handle(line) {
   const input = line.trim();
@@ -543,11 +569,16 @@ function handle(line) {
         log('Usage: in <minutes> [label]');
         break;
       }
+      const minsNumber = Number(mins);
+      if (!Number.isFinite(minsNumber) || minsNumber <= 0 || minsNumber > 1440) {
+        log('Minutes must be a positive number between 0.001 and 1440.');
+        break;
+      }
       const label = labelParts.join(' ').trim();
-      const fireTime = new Date(Date.now() + Number(mins) * 60 * 1000);
+      const fireTime = new Date(Date.now() + minsNumber * 60 * 1000);
       const entry = addPending('in', `${mins}m`, label, fireTime);
       if (entry) {
-        scheduleIn(mins, label, entry.id);
+        scheduleIn(minsNumber, label, entry.id);
       }
       break;
     }
@@ -624,8 +655,8 @@ function handle(line) {
         break;
       }
       const vol = Number(rest[0]);
-      if (!Number.isFinite(vol) || vol < 0 || vol > 100 || !Number.isInteger(vol)) {
-        log('Volume must be an integer between 0 and 100.');
+      if (!Number.isFinite(vol) || vol <= 0 || vol > 100) {
+        log('Volume must be a number between 1 and 100.');
       } else {
         alarmVolume = vol;
         saveConfig();
@@ -640,6 +671,13 @@ function handle(line) {
     case 'quit':
     case 'exit': {
       stopAlarm();
+      // Create stop flag to signal watchdog this was intentional
+      try {
+        fs.writeFileSync(stopFlagFile, 'stop', 'utf8');
+      } catch (e) {
+        log(`Warning: Could not write stop flag: ${e.message}`);
+      }
+      stopHeartbeat();
       // Clear all pending timeouts atomically
       pendingTimeouts.forEach((timeoutId) => {
         clearTimeout(timeoutId);
