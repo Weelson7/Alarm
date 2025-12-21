@@ -78,7 +78,7 @@ function printHeader() {
  ███████║╚██████╗██║  ██║███████╗██████╔╝╚██████╔╝███████╗███████╗██║  ██║
  ╚══════╝ ╚═════╝╚═╝  ╚═╝╚══════╝╚═════╝  ╚═════╝ ╚══════╝╚══════╝╚═╝  ╚═╝
 `);
-  const author = chalk.gray('                           by Weelson');
+  const author = chalk.gray('                                           by Weelson');
   const time = chalk.yellow.bold(`                           ${getFormattedTime()}`);
   const separator = chalk.gray('─'.repeat(80));
   

@@ -37,8 +37,7 @@ if %LAST_START_SECONDS% GTR 0 (
 REM Update last start time for next iteration
 set LAST_START_SECONDS=%CURRENT_SECONDS%
 
-REM Clear any previous graceful-stop marker so unexpected exits restart
-if exist "%STOP_FILE%" del /q "%STOP_FILE%"
+REM Do not clear a previous graceful-stop marker here; watchdog handles stale cleanup
 
 REM Check if we've exceeded max retries
 if %RETRY_COUNT% GTR %MAX_RETRIES% (
@@ -57,7 +56,6 @@ node scheduler.js
 REM Check exit code
 if exist "%STOP_FILE%" (
     REM Graceful shutdown requested by scheduler
-    del /q "%STOP_FILE%"
     exit /b 0
 )
 

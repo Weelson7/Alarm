@@ -52,11 +52,24 @@ On Error GoTo 0
 
 lastSuccessfulStart = 0
 
+' Clear any stale graceful-stop marker on startup so a new launch isn't blocked
+On Error Resume Next
+If objFSO.FileExists(stopFlagFile) Then
+    objFSO.DeleteFile stopFlagFile, True
+End If
+Err.Clear
+On Error GoTo 0
+
 Call LaunchScheduler()
 
 Do
     ' If scheduler requested a stop, exit watchdog too
     If objFSO.FileExists(stopFlagFile) Then
+        ' Clean up the flag and exit to honor graceful shutdown
+        On Error Resume Next
+        objFSO.DeleteFile stopFlagFile, True
+        Err.Clear
+        On Error GoTo 0
         WScript.Quit 0
     End If
 
