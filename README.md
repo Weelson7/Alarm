@@ -18,21 +18,24 @@ A Windows-based alarm scheduler application built with Node.js. Schedule alarms 
 2. Clone or download this repository
 3. Navigate to the project directory
 4. Install dependencies:
-   ```
-   npm install
-   ```
+
+```bash
+npm install
+```
 
 ## Usage
 
 ### Starting the Scheduler
 
 Run the watchdog to start the scheduler with admin elevation:
-```
+
+```bash
 cscript watchdog.vbs
 ```
 
 Or directly start with Node.js:
-```
+
+```bash
 npm start
 ```
 
@@ -41,51 +44,67 @@ npm start
 Once running, the scheduler accepts the following commands:
 
 #### Schedule an alarm at a specific time
+
 ```
 at 14:30 Lunch reminder
 ```
+
 Schedules an alarm at 14:30 (2:30 PM) with label "Lunch reminder"
 
 #### Schedule an alarm after N minutes
+
 ```
 in 30 Wake up
 ```
+
 Schedules an alarm in 30 minutes with label "Wake up"
 
 #### Add a daily recurring alarm
+
 ```
 daily 08:00 Morning alarm
 ```
+
 Adds a daily alarm at 08:00 every day
 
 #### Remove a daily alarm
+
 ```
 remove-daily 08:00
 ```
+
 Removes the daily alarm at 08:00
 
 #### Show pending alarms
+
 ```
 show
 ```
+
 Displays all scheduled alarms with their fire times
 
 #### Clear all alarms
+
 ```
 clear
 ```
+
 Removes all pending alarms (daily alarms remain)
 
 #### Set alarm volume
+
 ```
 volume 75
 ```
+
 Sets alarm volume to 75% (0-100)
 
 #### Exit
+
 ```
 exit
 ```
+
 Gracefully shuts down the scheduler
 
 ## Configuration
@@ -115,6 +134,7 @@ These files are created automatically and include backup recovery (.bak files) i
 ## Error Recovery
 
 If the application crashes:
+
 1. `run.bat` automatically restarts it (up to 5 consecutive attempts)
 2. If 5 crashes occur in quick succession, the batch file exits with an error
 3. Pending alarms are restored from `pending.json` on restart
@@ -123,16 +143,19 @@ If the application crashes:
 ## Troubleshooting
 
 ### Application won't start
+
 - Ensure Node.js is installed and in your PATH
 - Run `watchdog.vbs` with administrator privileges
 - Check that all files are in the same directory
 
 ### Alarms not playing
+
 - Verify `alarm.mp3` exists in the application directory
 - Check Windows volume is not muted
 - Ensure the volume percentage is not set to 0%
 
 ### Daily alarms not triggering
+
 - Check that daily alarms are enabled (add one with `daily HH:MM Label`)
 - Verify the system time is correct
 - Restart the application
