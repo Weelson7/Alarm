@@ -1,0 +1,11 @@
+{
+  "name": "alarm-scheduler",
+  "version": "1.0.0",
+  "description": "Simple study alarm scheduler",
+  "main": "scheduler.js",
+  "scripts": {
+    "start": "node scheduler.js"
+  },
+  "author": "",
+  "license": "MIT"
+}
