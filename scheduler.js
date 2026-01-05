@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const readline = require('readline');
-const { spawn } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 const chalk = require('chalk');
 
 // Initialize readline interface
@@ -330,15 +330,19 @@ function deleteWakeTask(taskName) {
 
 function cleanupAllWakeTasks() {
   try {
-    // Delete all manual alarm wake tasks
-    const manualPrefix = WAKE_TASK_PREFIX_MANUAL.replace(/'/g, "''");
-    const dailyPrefix = WAKE_TASK_PREFIX_DAILY.replace(/'/g, "''");
-    const psScript = [
-      `Get-ScheduledTask | Where-Object { $_.TaskName -like '${manualPrefix}*' -or $_.TaskName -like '${dailyPrefix}*' } | Unregister-ScheduledTask -Confirm:$false -ErrorAction SilentlyContinue -WarningAction SilentlyContinue | Out-Null`
-    ].join('\n');
-    runPowerShell(psScript);
+    // Delete all wake tasks - requires elevation in some cases
+    const manualPrefix = WAKE_TASK_PREFIX_MANUAL.replace(/'/g, "''").replace(/\\/g, "\\\\");
+    const dailyPrefix = WAKE_TASK_PREFIX_DAILY.replace(/'/g, "''").replace(/\\/g, "\\\\");
+    const innerScript = `Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object { \\$_.TaskName -like '${manualPrefix}*' -or \\$_.TaskName -like '${dailyPrefix}*' } | ForEach-Object { try { Unregister-ScheduledTask -TaskName \\$_.TaskName -Confirm:\\$false -ErrorAction Stop } catch { } }`.replace(/'/g, "''");
+    const psScript = `Start-Process powershell -Verb RunAs -ArgumentList '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command \\"${innerScript}\\"' -WindowStyle Hidden -Wait`;
+    
+    // Use spawnSync to wait for completion
+    spawnSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', psScript], {
+      stdio: 'ignore',
+      windowsHide: true
+    });
   } catch (_) {
-    // ignore
+    // ignore - best effort cleanup
   }
 }
 
